@@ -1,0 +1,32 @@
+name: flutter_reader
+description: "A high-performance scrollable reader widget with O(log N) jump-to-item, automatic height measurement, lazy-loading, and full-text search."
+version: 1.0.0+1
+homepage: https://github.com/user/flutter_reader
+repository: https://github.com/user/flutter_reader
+issue_tracker: https://github.com/user/flutter_reader/issues
+
+topics:
+  - scroll
+  - reader
+  - widgets
+  - performance
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  reader_engine: ^1.0.0
+  # For local development, create a pubspec_overrides.yaml with:
+  #   dependency_overrides:
+  #     reader_engine:
+  #       path: ../reader_engine
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
