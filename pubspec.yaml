@@ -1,9 +1,9 @@
 name: flutter_reader
 description: "A high-performance scrollable reader widget with O(log N) jump-to-item, automatic height measurement, lazy-loading, and full-text search."
-version: 1.0.0+1
-homepage: https://github.com/user/flutter_reader
-repository: https://github.com/user/flutter_reader
-issue_tracker: https://github.com/user/flutter_reader/issues
+version: 1.0.0
+homepage: https://github.com/dev-altern/flutter_reader
+repository: https://github.com/dev-altern/flutter_reader
+issue_tracker: https://github.com/dev-altern/flutter_reader/issues
 
 topics:
   - scroll

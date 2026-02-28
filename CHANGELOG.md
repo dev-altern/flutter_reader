@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0+1
+## 1.0.0
 
 * Initial release.
 * ReaderView: CustomScrollView-based scrollable widget with engine-backed scroll extent.
