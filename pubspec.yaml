@@ -17,11 +17,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  reader_engine: ^1.0.0
-  # For local development, create a pubspec_overrides.yaml with:
-  #   dependency_overrides:
-  #     reader_engine:
-  #       path: ../reader_engine
+  reader_engine:
+    git:
+      url: https://github.com/dev-altern/reader_engine.git
+      ref: main
+  # When published to pub.dev, replace the git dependency above with:
+  #   reader_engine: ^1.0.0
 
 dev_dependencies:
   flutter_test:
