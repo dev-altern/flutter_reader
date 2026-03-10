@@ -44,6 +44,9 @@ class ReaderController extends ChangeNotifier {
   late final ReaderEngine _engine;
   ScrollController? _scrollController;
 
+  /// Whether the view is in reverse (chat) mode.
+  bool _reverse = false;
+
   // ── Lazy-loading state ──────────────────────────────────────────────
 
   /// Whether there is more content available before the current items.
@@ -92,6 +95,9 @@ class ReaderController extends ChangeNotifier {
   /// The underlying engine (for advanced use).
   ReaderEngine get engine => _engine;
 
+  /// Whether the controller is in reverse (chat) mode.
+  bool get isReverse => _reverse;
+
   /// Total scroll extent including any lazy-load buffer.
   ///
   /// When [hasMoreAfter] is true, adds [loadMoreBufferExtent] to
@@ -102,8 +108,13 @@ class ReaderController extends ChangeNotifier {
   // ── Attach / Detach ─────────────────────────────────────────────────
 
   /// Attach to a ScrollController. Called internally by [ReaderView].
-  void attach(ScrollController scrollController) {
+  ///
+  /// When [reverse] is true, scroll compensation from height measurements
+  /// is suppressed (the reversed CustomScrollView handles bottom-pinning
+  /// naturally).
+  void attach(ScrollController scrollController, {bool reverse = false}) {
     _scrollController = scrollController;
+    _reverse = reverse;
     _scrollController!.addListener(_onScroll);
     // The first frame establishes layout and viewport dimensions.
     // Schedule the initial edge check for the frame after that, when
@@ -133,7 +144,11 @@ class ReaderController extends ChangeNotifier {
   void jumpToId(String id, {double alignment = 0.0}) {
     final result = _engine.jumpToId(id);
     if (result != null && _scrollController != null) {
-      _scrollController!.jumpTo(_alignedOffset(result.pixelOffset, alignment));
+      if (_reverse) {
+        _scrollController!.jumpTo(0);
+      } else {
+        _scrollController!.jumpTo(_alignedOffset(result.pixelOffset, alignment));
+      }
     }
   }
 
@@ -142,9 +157,24 @@ class ReaderController extends ChangeNotifier {
   /// [alignment] controls where in the viewport the item lands:
   /// 0.0 = top edge (default), 0.5 = centered, 1.0 = bottom edge.
   void jumpToIndex(int index, {double alignment = 0.0}) {
-    final result = _engine.jumpToIndex(index);
-    if (_scrollController != null) {
-      _scrollController!.jumpTo(_alignedOffset(result.pixelOffset, alignment));
+    if (_reverse) {
+      // In reverse mode, index 0 is at the bottom (newest).
+      // To show the last appended item, jump to offset 0.
+      if (index >= _engine.itemCount - 1) {
+        _scrollController?.jumpTo(0);
+      } else {
+        final result = _engine.jumpToIndex(index);
+        if (_scrollController != null) {
+          _scrollController!.jumpTo(
+            _alignedOffset(result.pixelOffset, alignment),
+          );
+        }
+      }
+    } else {
+      final result = _engine.jumpToIndex(index);
+      if (_scrollController != null) {
+        _scrollController!.jumpTo(_alignedOffset(result.pixelOffset, alignment));
+      }
     }
   }
 
@@ -160,11 +190,48 @@ class ReaderController extends ChangeNotifier {
   }) async {
     final result = _engine.jumpToId(id);
     if (result != null && _scrollController != null) {
-      await _scrollController!.animateTo(
-        _alignedOffset(result.pixelOffset, alignment),
-        duration: duration,
-        curve: curve,
-      );
+      if (_reverse) {
+        await _scrollController!.animateTo(
+          0,
+          duration: duration,
+          curve: curve,
+        );
+      } else {
+        await _scrollController!.animateTo(
+          _alignedOffset(result.pixelOffset, alignment),
+          duration: duration,
+          curve: curve,
+        );
+      }
+    }
+  }
+
+  /// Scroll to the end of the list.
+  ///
+  /// In normal mode, scrolls to the last item.
+  /// In reverse mode, scrolls to offset 0 (the bottom/newest).
+  void scrollToEnd() {
+    if (_scrollController == null) return;
+    if (_reverse) {
+      _scrollController!.jumpTo(0);
+    } else if (_engine.itemCount > 0) {
+      jumpToIndex(_engine.itemCount - 1, alignment: 1.0);
+    }
+  }
+
+  /// Whether the scroll position is currently at the end.
+  ///
+  /// In reverse mode, "at end" means offset ~0 (bottom).
+  /// In normal mode, "at end" means offset ~maxScrollExtent.
+  bool get isAtEnd {
+    if (_scrollController == null || !_scrollController!.hasClients) {
+      return true;
+    }
+    if (_reverse) {
+      return _scrollController!.offset < 1.0;
+    } else {
+      final pos = _scrollController!.position;
+      return pos.maxScrollExtent - pos.pixels < 1.0;
     }
   }
 
@@ -190,9 +257,13 @@ class ReaderController extends ChangeNotifier {
   // ── Measurement ─────────────────────────────────────────────────────
 
   /// Report a measured height (called by [MeasuredItem]).
+  ///
+  /// In reverse mode, scroll compensation is suppressed — the reversed
+  /// [CustomScrollView] handles bottom-pinning automatically via its
+  /// growth direction.
   void reportMeasuredHeight(int index, double height) {
     final result = _engine.reportMeasuredHeight(index, height);
-    if (result.scrollCompensation != 0.0 && _scrollController != null) {
+    if (!_reverse && result.scrollCompensation != 0.0 && _scrollController != null) {
       final newOffset = _scrollController!.offset + result.scrollCompensation;
       _scrollController!.jumpTo(newOffset);
     }
@@ -204,7 +275,7 @@ class ReaderController extends ChangeNotifier {
       _scrollController?.position.viewportDimension ?? 0,
     );
     final compensation = _engine.onWidthChanged(newWidth);
-    if (compensation != 0.0 && _scrollController != null) {
+    if (!_reverse && compensation != 0.0 && _scrollController != null) {
       _scrollController!.jumpTo(_scrollController!.offset + compensation);
     }
   }
@@ -226,7 +297,9 @@ class ReaderController extends ChangeNotifier {
       items,
       estimatedHeights: estimatedHeights,
     );
-    _applyCompensation(compensation);
+    if (!_reverse) {
+      _applyCompensation(compensation);
+    }
     notifyListeners();
   }
 
@@ -268,7 +341,9 @@ class ReaderController extends ChangeNotifier {
       items,
       estimatedHeights: estimatedHeights,
     );
-    _applyCompensation(compensation);
+    if (!_reverse) {
+      _applyCompensation(compensation);
+    }
     notifyListeners();
   }
 
@@ -276,7 +351,9 @@ class ReaderController extends ChangeNotifier {
   void removeItems(int startIndex, int count) {
     if (count <= 0) return;
     final compensation = _engine.removeItems(startIndex, count);
-    _applyCompensation(compensation);
+    if (!_reverse) {
+      _applyCompensation(compensation);
+    }
     notifyListeners();
   }
 
@@ -316,7 +393,7 @@ class ReaderController extends ChangeNotifier {
     if (keepEnd < count) {
       final tailCount = count - keepEnd;
       final compensation = _engine.removeItems(keepEnd, tailCount);
-      _applyCompensation(compensation);
+      if (!_reverse) _applyCompensation(compensation);
       hasMoreAfter = true;
     }
 

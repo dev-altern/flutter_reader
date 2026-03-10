@@ -17,9 +17,11 @@ typedef ReaderItemBuilder =
 /// - Zero-jank scroll compensation on height corrections
 /// - Efficient width-change handling
 /// - Accurate scroll extent from frame 1 (engine-backed)
+/// - **Reverse mode** for chat-style bottom-pinned scrolling
 ///
 /// Usage:
 /// ```dart
+/// // Standard (reader/document mode)
 /// ReaderView(
 ///   controller: myReaderController,
 ///   itemBuilder: (context, index, item) {
@@ -29,6 +31,13 @@ typedef ReaderItemBuilder =
 ///       _ => Text('Unknown: ${item.id}'),
 ///     };
 ///   },
+/// )
+///
+/// // Chat mode (reversed, pinned to bottom)
+/// ReaderView(
+///   controller: myReaderController,
+///   reverse: true,
+///   itemBuilder: (context, index, item) => MessageBubble(item.data),
 /// )
 /// ```
 class ReaderView extends StatefulWidget {
@@ -54,6 +63,19 @@ class ReaderView extends StatefulWidget {
   /// or other item-level state that changes independently of scroll.
   final Listenable? itemUpdateListenable;
 
+  /// Whether the list scrolls in reverse (newest items at bottom).
+  ///
+  /// When true:
+  /// - The scroll view is reversed (items grow from bottom to top)
+  /// - New items appended via [ReaderController.appendItems] appear at the
+  ///   bottom and the list stays pinned there
+  /// - Scroll compensation from height corrections is suppressed when
+  ///   the user is at the bottom edge
+  /// - Keyboard open/close naturally keeps the bottom position
+  ///
+  /// This is the standard pattern for chat UIs.
+  final bool reverse;
+
   const ReaderView({
     super.key,
     required this.controller,
@@ -62,6 +84,7 @@ class ReaderView extends StatefulWidget {
     this.padding,
     this.physics,
     this.itemUpdateListenable,
+    this.reverse = false,
   });
 
   @override
@@ -77,28 +100,36 @@ class _ReaderViewState extends State<ReaderView> {
   void initState() {
     super.initState();
     _scrollController = ScrollController();
-    _scrollController.addListener(_onScrollForAnchor);
+    if (!widget.reverse) {
+      _scrollController.addListener(_onScrollForAnchor);
+    }
     _anchorTracker = AnchorTracker(engine: widget.controller.engine);
-    widget.controller.attach(_scrollController);
+    widget.controller.attach(_scrollController, reverse: widget.reverse);
   }
 
   @override
   void didUpdateWidget(ReaderView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
-      // Snapshot the anchor position before swapping controllers.
-      final snap = _anchorTracker.snapshot();
+      if (widget.reverse) {
+        // In reverse mode, no anchor tracking needed — just swap.
+        oldWidget.controller.detach();
+        widget.controller.attach(_scrollController, reverse: widget.reverse);
+      } else {
+        // Snapshot the anchor position before swapping controllers.
+        final snap = _anchorTracker.snapshot();
 
-      oldWidget.controller.detach();
-      _anchorTracker = AnchorTracker(engine: widget.controller.engine);
-      widget.controller.attach(_scrollController);
+        oldWidget.controller.detach();
+        _anchorTracker = AnchorTracker(engine: widget.controller.engine);
+        widget.controller.attach(_scrollController, reverse: widget.reverse);
 
-      // Restore anchor so the user sees the same visual position.
-      _anchorTracker.restore(snap);
-      final compensation =
-          _anchorTracker.computeCompensation(_scrollController.offset);
-      if (compensation.abs() > 0.5) {
-        _scrollController.jumpTo(_scrollController.offset + compensation);
+        // Restore anchor so the user sees the same visual position.
+        _anchorTracker.restore(snap);
+        final compensation =
+            _anchorTracker.computeCompensation(_scrollController.offset);
+        if (compensation.abs() > 0.5) {
+          _scrollController.jumpTo(_scrollController.offset + compensation);
+        }
       }
     }
   }
@@ -114,7 +145,9 @@ class _ReaderViewState extends State<ReaderView> {
 
   @override
   void dispose() {
-    _scrollController.removeListener(_onScrollForAnchor);
+    if (!widget.reverse) {
+      _scrollController.removeListener(_onScrollForAnchor);
+    }
     widget.controller.detach();
     _scrollController.dispose();
     super.dispose();
@@ -125,7 +158,18 @@ class _ReaderViewState extends State<ReaderView> {
     final sliverList = SliverList(
       delegate: _ReaderChildDelegate(
         controller: widget.controller,
-        builder: (context, index) {
+        reverse: widget.reverse,
+        builder: (context, rawIndex) {
+          // In reverse mode, flip the index so item 0 (oldest) renders
+          // at the bottom of the reversed CustomScrollView.
+          final index = widget.reverse
+              ? widget.controller.itemCount - 1 - rawIndex
+              : rawIndex;
+
+          if (index < 0 || index >= widget.controller.itemCount) {
+            return const SizedBox.shrink();
+          }
+
           final item = widget.controller.engine.itemAt(index);
 
           // Build the item, optionally wrapped in a per-item
@@ -165,6 +209,7 @@ class _ReaderViewState extends State<ReaderView> {
         controller: _scrollController,
         physics: widget.physics,
         cacheExtent: widget.cacheExtent,
+        reverse: widget.reverse,
         slivers: [
           if (widget.padding != null)
             SliverPadding(padding: widget.padding!, sliver: sliverList)
@@ -184,11 +229,13 @@ class _ReaderViewState extends State<ReaderView> {
 /// large-distance jumps.
 class _ReaderChildDelegate extends SliverChildBuilderDelegate {
   final ReaderController controller;
+  final bool reverse;
 
   _ReaderChildDelegate({
     required this.controller,
     required NullableIndexedWidgetBuilder builder,
     int? childCount,
+    this.reverse = false,
   }) : super(builder, childCount: childCount);
 
   @override
