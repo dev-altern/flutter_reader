@@ -245,6 +245,14 @@ class _ReaderChildDelegate extends SliverChildBuilderDelegate {
     double leadingScrollOffset,
     double trailingScrollOffset,
   ) {
-    return controller.effectiveTotalHeight;
+    // Item measurements are reported via a post-frame callback (see
+    // [MeasuredItem]), so during a layout pass the controller's cached
+    // total height can lag behind the children that SliverList has just
+    // laid out. Returning a value smaller than `trailingScrollOffset`
+    // trips `SliverList.performLayout`'s
+    // `estimatedMaxScrollOffset >= endScrollOffset - childScrollOffset(firstChild)`
+    // assert, so clamp to keep the invariant.
+    final total = controller.effectiveTotalHeight;
+    return total < trailingScrollOffset ? trailingScrollOffset : total;
   }
 }
