@@ -160,8 +160,9 @@ class _ReaderViewState extends State<ReaderView> {
         controller: widget.controller,
         reverse: widget.reverse,
         builder: (context, rawIndex) {
-          // In reverse mode, flip the index so item 0 (oldest) renders
-          // at the bottom of the reversed CustomScrollView.
+          // The reversed CustomScrollView lays its children out from the
+          // bottom, so flip the index: the last item (newest) renders at
+          // the bottom and item 0 (oldest) at the top.
           final index = widget.reverse
               ? widget.controller.itemCount - 1 - rawIndex
               : rawIndex;

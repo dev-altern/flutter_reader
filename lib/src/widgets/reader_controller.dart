@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/widgets.dart';
 import 'package:reader_engine/reader_engine.dart';
 
@@ -139,13 +142,14 @@ class ReaderController extends ChangeNotifier {
 
   /// Jump to item by ID.
   ///
-  /// [alignment] controls where in the viewport the item lands:
-  /// 0.0 = top edge (default), 0.5 = centered, 1.0 = bottom edge.
+  /// [alignment] is where the item's top edge lands, as a fraction of the
+  /// viewport height: 0.0 = top edge (default), 0.5 = middle, 1.0 = bottom
+  /// edge. Reverse mode places the item the same way.
   void jumpToId(String id, {double alignment = 0.0}) {
     final result = _engine.jumpToId(id);
     if (result != null && _scrollController != null) {
       if (_reverse) {
-        _scrollController!.jumpTo(0);
+        _jumpReversed(id, alignment);
       } else {
         _scrollController!.jumpTo(_alignedOffset(result.pixelOffset, alignment));
       }
@@ -154,22 +158,15 @@ class ReaderController extends ChangeNotifier {
 
   /// Jump to item by index.
   ///
-  /// [alignment] controls where in the viewport the item lands:
-  /// 0.0 = top edge (default), 0.5 = centered, 1.0 = bottom edge.
+  /// [alignment] is where the item's top edge lands, as a fraction of the
+  /// viewport height: 0.0 = top edge (default), 0.5 = middle, 1.0 = bottom
+  /// edge. Reverse mode places the item the same way.
   void jumpToIndex(int index, {double alignment = 0.0}) {
     if (_reverse) {
-      // In reverse mode, index 0 is at the bottom (newest).
-      // To show the last appended item, jump to offset 0.
-      if (index >= _engine.itemCount - 1) {
-        _scrollController?.jumpTo(0);
-      } else {
-        final result = _engine.jumpToIndex(index);
-        if (_scrollController != null) {
-          _scrollController!.jumpTo(
-            _alignedOffset(result.pixelOffset, alignment),
-          );
-        }
-      }
+      if (_engine.itemCount == 0 || _scrollController == null) return;
+      final target = index.clamp(0, _engine.itemCount - 1);
+      _engine.jumpToIndex(target);
+      _jumpReversed(_engine.itemAt(target).id, alignment);
     } else {
       final result = _engine.jumpToIndex(index);
       if (_scrollController != null) {
@@ -180,8 +177,9 @@ class ReaderController extends ChangeNotifier {
 
   /// Animate to item by ID.
   ///
-  /// [alignment] controls where in the viewport the item lands:
-  /// 0.0 = top edge (default), 0.5 = centered, 1.0 = bottom edge.
+  /// [alignment] is where the item's top edge lands, as a fraction of the
+  /// viewport height: 0.0 = top edge (default), 0.5 = middle, 1.0 = bottom
+  /// edge. Reverse mode places the item the same way.
   Future<void> animateToId(
     String id, {
     double alignment = 0.0,
@@ -191,11 +189,7 @@ class ReaderController extends ChangeNotifier {
     final result = _engine.jumpToId(id);
     if (result != null && _scrollController != null) {
       if (_reverse) {
-        await _scrollController!.animateTo(
-          0,
-          duration: duration,
-          curve: curve,
-        );
+        await _animateReversed(id, alignment, duration, curve);
       } else {
         await _scrollController!.animateTo(
           _alignedOffset(result.pixelOffset, alignment),
@@ -241,6 +235,99 @@ class ReaderController extends ChangeNotifier {
     final maxExtent = _scrollController!.position.maxScrollExtent;
     final adjusted = itemOffset - viewportHeight * alignment;
     return adjusted.clamp(0.0, maxExtent);
+  }
+
+  // ── Reverse-mode navigation ─────────────────────────────────────────
+
+  /// How many times a reverse-mode jump re-aims after landing.
+  static const int _maxReverseSettlePasses = 3;
+
+  /// Counts reverse-mode navigations, so a correction still pending from an
+  /// earlier jump can tell that a newer one replaced it.
+  int _reverseNavigation = 0;
+
+  /// Scroll offset that puts the top edge of item [id] [alignment] of the
+  /// way down the viewport in reverse mode, or null when [id] is unknown or
+  /// the view has not been laid out yet.
+  ///
+  /// The reversed view lays the list out from the bottom: offset 0 shows
+  /// the end of the list, and an item's top edge sits
+  /// `totalHeight - itemOffset` above that end. The engine is read on every
+  /// call, so the result improves as items get measured.
+  double? _reversedOffset(String id, double alignment) {
+    final controller = _scrollController;
+    final location = _engine.registry.locateById(id);
+    if (location == null || controller == null || !controller.hasClients) {
+      return null;
+    }
+    final position = controller.position;
+    if (!position.hasViewportDimension) return null;
+    final offset = _engine.totalHeight -
+        location.offset -
+        position.viewportDimension * (1 - alignment);
+    if (!position.hasContentDimensions) return math.max(0.0, offset);
+    return offset.clamp(position.minScrollExtent, position.maxScrollExtent);
+  }
+
+  void _jumpReversed(String id, double alignment) {
+    final offset = _reversedOffset(id, alignment);
+    if (offset == null) return;
+    final navigation = ++_reverseNavigation;
+    _scrollController!.jumpTo(offset);
+    unawaited(_settleReversed(id, alignment, navigation, offset));
+  }
+
+  Future<void> _animateReversed(
+    String id,
+    double alignment,
+    Duration duration,
+    Curve curve,
+  ) async {
+    final offset = _reversedOffset(id, alignment);
+    if (offset == null) return;
+    final navigation = ++_reverseNavigation;
+    await _scrollController!.animateTo(offset, duration: duration, curve: curve);
+    await _settleReversed(id, alignment, navigation, offset);
+  }
+
+  /// Re-aims a reverse-mode jump or animation that was sent to [sentTo] once
+  /// the items it scrolled past have been measured.
+  ///
+  /// Offsets of items that were never laid out are estimates, and reverse
+  /// mode has no scroll compensation to absorb the difference. Reaching the
+  /// target lays out every item between it and the end of the list, and
+  /// [MeasuredItem] reports their real heights in post-frame callbacks, so
+  /// each pass waits for the end of the frame and jumps to the refined
+  /// offset. It stops as soon as a newer navigation starts or something
+  /// else moves the list, such as the user's finger.
+  Future<void> _settleReversed(
+    String id,
+    double alignment,
+    int navigation,
+    double sentTo,
+  ) async {
+    var expected = sentTo;
+    for (var pass = 0; pass < _maxReverseSettlePasses; pass++) {
+      await WidgetsBinding.instance.endOfFrame;
+      final controller = _scrollController;
+      if (navigation != _reverseNavigation ||
+          controller == null ||
+          !controller.hasClients) {
+        return;
+      }
+      final position = controller.position;
+      final reachable = position.hasContentDimensions
+          ? expected.clamp(position.minScrollExtent, position.maxScrollExtent)
+          : expected;
+      if (position.isScrollingNotifier.value ||
+          (position.pixels - reachable).abs() > 0.5) {
+        return;
+      }
+      final offset = _reversedOffset(id, alignment);
+      if (offset == null || (offset - position.pixels).abs() <= 0.5) return;
+      controller.jumpTo(offset);
+      expected = offset;
+    }
   }
 
   // ── Queries ─────────────────────────────────────────────────────────

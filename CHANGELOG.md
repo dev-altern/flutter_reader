@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+* ReaderController: in reverse (chat) mode, `jumpToId`, `jumpToIndex` and `animateToId` now reach the requested item at the requested alignment. `jumpToId` and `animateToId` used to scroll to the newest item, and `jumpToIndex` used forward-mode offsets.
+* ReaderController: reverse-mode jumps re-aim once the items they scrolled past report their real heights, and stop if a newer jump starts or the user moves the list.
+
 ## 1.0.0
 
 * Initial release.
