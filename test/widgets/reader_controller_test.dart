@@ -568,4 +568,147 @@ void main() {
       controller.dispose();
     });
   });
+
+  group('ReaderController — reverse mode', () {
+    // The default test surface is 800×600, so the list's viewport is 600 px
+    // tall with its top edge at y = 0. Items render 50 px tall while the
+    // engine starts from 44/56 px estimates, so every jump starts from
+    // estimated offsets.
+    const viewportHeight = 600.0;
+
+    late ReaderController controller;
+
+    setUp(() {
+      controller = buildController();
+    });
+
+    tearDown(() {
+      controller.dispose();
+    });
+
+    Future<void> pumpReversed(WidgetTester tester) {
+      return tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: ReaderView(
+            controller: controller,
+            reverse: true,
+            itemBuilder: (_, index, item) => SizedBox(
+              height: 50,
+              child: Text(item.id),
+            ),
+          ),
+        ),
+      );
+    }
+
+    double topOf(WidgetTester tester, String id) =>
+        tester.getTopLeft(find.text(id)).dy;
+
+    testWidgets('starts at the end of the list', (tester) async {
+      await pumpReversed(tester);
+
+      expect(tester.getBottomLeft(find.text('v_5_10')).dy, viewportHeight);
+      expect(controller.isAtEnd, isTrue);
+    });
+
+    testWidgets('jumpToId puts the item at the top edge', (tester) async {
+      await pumpReversed(tester);
+
+      controller.jumpToId('v_2_5');
+      await tester.pumpAndSettle();
+
+      expect(topOf(tester, 'v_2_5'), moreOrLessEquals(0, epsilon: 0.5));
+    });
+
+    testWidgets('jumpToId honours alignment', (tester) async {
+      await pumpReversed(tester);
+
+      controller.jumpToId('v_2_5', alignment: 0.5);
+      await tester.pumpAndSettle();
+
+      expect(
+        topOf(tester, 'v_2_5'),
+        moreOrLessEquals(viewportHeight * 0.5, epsilon: 0.5),
+      );
+    });
+
+    testWidgets('jumpToIndex targets the item at that index', (tester) async {
+      await pumpReversed(tester);
+
+      controller.jumpToIndex(16, alignment: 0.5); // v_2_5
+      await tester.pumpAndSettle();
+
+      expect(
+        topOf(tester, 'v_2_5'),
+        moreOrLessEquals(viewportHeight * 0.5, epsilon: 0.5),
+      );
+    });
+
+    testWidgets('jumpToIndex on the last item returns to the end',
+        (tester) async {
+      await pumpReversed(tester);
+      controller.jumpToId('ch_2');
+      await tester.pumpAndSettle();
+      expect(controller.isAtEnd, isFalse);
+
+      controller.jumpToIndex(controller.itemCount - 1);
+      await tester.pumpAndSettle();
+
+      expect(tester.getBottomLeft(find.text('v_5_10')).dy, viewportHeight);
+      expect(controller.isAtEnd, isTrue);
+    });
+
+    testWidgets('clamps at the start of the list', (tester) async {
+      await pumpReversed(tester);
+
+      controller.jumpToId('ch_1', alignment: 0.5);
+      await tester.pumpAndSettle();
+
+      expect(topOf(tester, 'ch_1'), moreOrLessEquals(0, epsilon: 0.5));
+    });
+
+    testWidgets('animateToId scrolls to the item', (tester) async {
+      await pumpReversed(tester);
+
+      final done = controller.animateToId('v_2_5', alignment: 0.5);
+      await tester.pumpAndSettle();
+      await done;
+
+      expect(
+        topOf(tester, 'v_2_5'),
+        moreOrLessEquals(viewportHeight * 0.5, epsilon: 0.5),
+      );
+    });
+
+    testWidgets('a newer jump replaces a pending correction', (tester) async {
+      await pumpReversed(tester);
+
+      controller.jumpToId('v_2_5');
+      controller.jumpToId('v_4_3');
+      await tester.pumpAndSettle();
+
+      expect(topOf(tester, 'v_4_3'), moreOrLessEquals(0, epsilon: 0.5));
+    });
+
+    testWidgets('a drag stops the correction', (tester) async {
+      await pumpReversed(tester);
+
+      // The jump lands on estimated offsets; the user grabs the list before
+      // the correction runs, and the list must stay under their finger.
+      controller.jumpToId('v_2_5');
+      final gesture = await tester.startGesture(const Offset(400, 300));
+      await gesture.moveBy(const Offset(0, 40));
+      await gesture.moveBy(const Offset(0, 40));
+      await tester.pump();
+      final heldAt = topOf(tester, 'v_2_5');
+      await tester.pump();
+
+      expect(heldAt, isNot(moreOrLessEquals(0, epsilon: 0.5)));
+      expect(topOf(tester, 'v_2_5'), heldAt);
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+    });
+  });
 }
